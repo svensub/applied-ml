@@ -1,0 +1,560 @@
+---
+title: "Applied Machine Learning Assessment: Part 1"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r include=FALSE, message = FALSE, warning=FALSE}
+
+# installing relevant packages
+cran.packages<-c("caret","tidyverse","rpart","rpart.plot","party",
+                 "randomForest","e1071","Rtsne","dbscan","C50","UpSetR",
+                 "RColorBrewer","GGally","ggfortify","reshape2","plyr",
+                 "corrplot","pROC","scatterplot3d","devtools","dendextend", 
+                 "magrittr","cluster", "gplots","methods","class","datasets", 
+                 "caTools","ggplot2","ggdendro","doParallel","devtools",
+                 "mlbench","plot3D","ROCR","UsingR","rafalib","downloader",
+                 "lattice","stepPlr","arm","kernlab","nnet","neuralnet",
+                 "MASS", "NeuralNetTools","ISLR", "boot","faraway","CVST",
+                 "readr", "pheatmap", "cluster", "missForest", "mice", "VIM",
+                 "mice", "limma", "factoextra")
+
+bioconductor.packages<-c("EBImage")
+
+# CRAN packages
+new.packages <- cran.packages[!(cran.packages %in% 
+                                installed.packages()[,"Package"])]
+if(length(new.packages)) install.packages(new.packages)
+
+# bioconductor packages
+if (!requireNamespace("BiocManager", quietly = TRUE))
+  install.packages("BiocManager")
+BiocManager::install()
+new.bio.packages<-bioconductor.packages[!(bioconductor.packages 
+                                         %in% installed.packages()[,"Package"])]
+if(length(new.bio.packages)) BiocManager::install(new.bio.packages)
+
+# packages from other repositories
+devtools::install_github("SheffieldML/vargplvm/vargplvmR")
+devtools::install_github("ManchesterBioinference/DEtime")
+
+# set working directory
+setwd("")
+
+# load relevant packages
+library(caret)
+library(ggplot2); theme_set(theme_minimal())
+library(UpSetR)
+library(GGally)
+library(rpart.plot)
+library(Rtsne)
+library(dplyr)
+library(randomForest)
+library(pheatmap)
+library(cluster)
+library(limma)
+library(reshape2)
+library(tracerer)
+library(VIM)
+library(magrittr)
+library(mice)
+library(psych)
+library(missForest)
+library(doParallel)
+library(gridExtra)
+library(grid)
+library(factoextra)
+
+```
+
+# Part 1
+
+This analysis seeks to apply a variety of data-mining approaches to explore and determine the features of three different types of data-sets.
+
+## Dataset A: Noise Added [15 marks]
+
+### 1A: Generate density plots (on all features or subsets of features) [3 marks]
+
+Dataset A comprises of fully-labelled data with noise added. Density plots have been generated for a subset of features, as well as for all features.
+
+```{r load, message = FALSE, warning = FALSE}
+# load data
+cuomoA = read.csv('Cuomo_A_NoiseAdded.csv',row.names = 1)
+cuomoData_A = cuomoA[,colnames(cuomoA)[colnames(cuomoA)!='classification']]
+cuomoClass = cuomoA$classification
+
+```
+
+Below, we can view the distribution of expression for a few different genes. 
+
+```{r density plot few features, message=FALSE, warning=FALSE}
+some.genes = c("YBX1","BANF1","TESC","ATF7IP","S100A16")
+for (gene in some.genes){
+  plot.df1 = data.frame('type'=as.factor(cuomoClass),'gene'=cuomoData_A[,gene])
+  print(ggplot(plot.df1,aes(x=gene,y=..density..,color=type))+geom_density()+ggtitle(gene))
+}  
+
+pairs.df1 = cuomoA[,c(some.genes,'classification')]
+pairs.df1$classification = as.factor(pairs.df1$classification)
+
+ggpairs(pairs.df1,mapping = aes(colour=classification,alpha=0.5))
+#dev.off()
+
+```
+
+Below, we see the expression values for all features. Two different sets of expression values can be seen: one centered around 0, and another more left-skewed. One possible hypothesis is that this second group of expression values is the noise added, but this will be explored further through cross validation.
+
+```{r density plot for all features,message=FALSE, warning=FALSE}
+df_long <- melt(data = as.matrix(cuomoData_A), 
+                id.vars = c("cell"),
+                variable.name = "variable",
+                value.name = "value")
+
+df_long <- df_long %>%
+  select(-Var2) %>%
+  rename(cell = Var1, expression=value)
+
+ggplot(df_long, aes(x=expression, color=cell)) +
+  geom_density(show.legend = FALSE) +
+  xlim(c(0, 2.5))+
+  ggtitle("Density plot of all features")
+```
+
+### 1A: Partition the dataset (e.g. as in cross validation; generate 3 instances) (+)
+### 1A: Visualise the data in a dim reduction setting; comment [4 marks]
+
+The noisy data set has been partitioned, with 3 instances generated. The instances comprise of 80% of  features being sampled without replacement, and with different seeds. Therefore, each instance includes 400 genes for 408 cells. Each instance has been visualized in dimension reduction setting using t-sNE.
+
+```{r partition, message = FALSE, warning = FALSE}
+# partitioning instance 1
+cuomoA = cuomoA[,colnames(cuomoA)[colnames(cuomoA)!='classification']]
+
+set.seed(42)
+genes=colnames(cuomoA)
+
+i1=sample(genes, 400, replace = FALSE)
+data1 <- cuomoA[,i1]
+
+cuomoTsne <- Rtsne(data1, check_duplicates=FALSE, pca=TRUE, perplexity=50, theta=0.5, dims=2)
+graph1 <- cuomoTsne$Y %>% 
+        as.data.frame() %>% 
+        rename(tSNE1=V1,  tSNE2=V2) %>% 
+        mutate( Type=as.character(cuomoClass) )%>% 
+        ggplot() +
+        geom_point(mapping = aes(x=tSNE1, y=tSNE2, color=Type), alpha=0.5) +
+        ggtitle("First instance") 
+
+# partitioning instance 2
+set.seed(24)
+i2=sample(genes, 400, replace = FALSE)
+data2 <- cuomoA[,i2]
+
+cuomoTsne <- Rtsne(data2, check_duplicates=FALSE, pca=TRUE, perplexity=50, theta=0.5, dims=2)
+graph2<-cuomoTsne$Y %>% 
+        as.data.frame() %>% 
+        rename(tSNE1=V1,  tSNE2=V2) %>% 
+        mutate( Type=as.character(cuomoClass) )%>% 
+        ggplot() +
+        geom_point(mapping = aes(x=tSNE1, y=tSNE2, color=Type), alpha=0.5)+
+        ggtitle("Second instance")
+
+# partitioning instance 3
+set.seed(30)
+
+i3=sample(genes, 400, replace = FALSE)
+data3 <- cuomoA[,i3]
+
+cuomoTsne <- Rtsne(data3, check_duplicates=FALSE, pca=TRUE, perplexity=50, theta=0.5, dims=2)
+graph3<- cuomoTsne$Y %>% 
+        as.data.frame() %>% 
+        rename(tSNE1=V1,  tSNE2=V2) %>% 
+        mutate( Type=as.character(cuomoClass) )%>% 
+        ggplot() +
+        geom_point(mapping = aes(x=tSNE1, y=tSNE2, color=Type), alpha=0.5)+
+        ggtitle("Third instance")
+
+grid.arrange(graph1, graph2, graph3, layout_matrix=rbind(c(1,2),c(3,4)))
+```
+
+The above plots clearly demonstrate a separation between the cells, which does not correspond to the classification (i.e., type) of the cell. There is a large and a small group including all cell types in all three instances, which points toward the presence of noise.
+
+### 1A: Apply a clustering approach on each instance; comment [5 marks]
+
+For all three instances, we apply a k-means clustering approach, and use the package factoextra to visualize the k-means clusters.
+
+```{r clustering}
+km1 <- kmeans(data1, 3, nstart = 50)
+km2 <- kmeans(data2, 3, nstart = 50)
+km3 <- kmeans(data3, 3, nstart = 50)
+
+k1 <- fviz_cluster(km1, data = data1,
+             palette = c("#2E9FDF", "#00AFBB", "#E7B800"), 
+             geom = "point",
+             ellipse.type = "convex", 
+             ggtheme = theme_bw(), main="Partition 1")
+
+k2 <- fviz_cluster(km2, data = data2,
+             palette = c("#2E9FDF", "#00AFBB", "#E7B800"), 
+             geom = "point",
+             ellipse.type = "convex", 
+             ggtheme = theme_bw(), main="Partition 2")
+
+k3 <- fviz_cluster(km3, data = data3,
+             palette = c("#2E9FDF", "#00AFBB", "#E7B800"), 
+             geom = "point",
+             ellipse.type = "convex", 
+             ggtheme = theme_bw(), main="Partition 3")
+
+grid.arrange(k1, k2, k3, layout_matrix=rbind(c(1,2),c(3,4)))
+```
+
+From the above, we can see that the clusters identified by the k-means algorithm do not align with the cell-types (which is diagrammatically represented in the t-sNE plots). In fact, the noisy data seems to prevent appropriate clustering of the data.
+
+### 1A: Identify unstable entries; link them to the density plots [3 marks]
+
+To identify unstable entries, i.e., differentiate between the variant and invariant cells. The variant or unstable cells here have been identified as those cells that have been allocated to different clusters in at least 2 out of the 3 instances. Subsequently, stable or invariant cells are those cells that have been identified to have the same cluster for 2 out of the 3 instances. A t-sNE plot is shown below, and we can see that most of the variant cells are found in the smaller separation of cells. 
+
+```{r identification of unstable entries, message = FALSE, warning = FALSE}
+km1 <- as.data.frame(km1$cluster)
+km1$ID = rownames(km1)
+
+km2 <- as.data.frame(km2$cluster)
+km2$ID = rownames(km2)
+clusters=merge(km1,km2,on="ID",all=TRUE)
+
+
+km3 <- as.data.frame(km3$cluster)
+km3$ID = rownames(km3)
+clusters=merge(clusters,km3,on="ID",all=TRUE)
+
+clusters=na.omit(clusters)
+
+for (i in 1:408) {
+  clusters$clu1[i]=length(which(clusters[i,c(2:4)]==1))
+  clusters$clu2[i]=length(which(clusters[i,c(2:4)]==2))
+  clusters$clu3[i]=length(which(clusters[i,c(2:4)]==3))
+  clusters$max[i]=max(clusters$clu1[i],clusters$clu2[i],clusters$clu3[i])/3
+}
+
+clusters = clusters %>%
+  mutate(label=ifelse(clusters$max < 0.6, "Variant", "Invariant"))
+
+label=as.data.frame(clusters$label)
+colnames(label)[1]="label"
+label$ID=clusters$ID
+cuomoA$ID=rownames(cuomoA)
+
+cuomoA=merge(cuomoA,label,by="ID")
+rownames(cuomoA)=cuomoA$ID
+cuomoA=cuomoA[,-1]
+
+cuomoTsne <- Rtsne(cuomoA[,-501], check_duplicates=FALSE, pca=TRUE, 
+                   perplexity=50, theta=0.5, dims=2)
+
+print(cuomoTsne$Y %>% 
+        as.data.frame() %>% 
+        rename(tSNE1=V1,  tSNE2=V2) %>% 
+        mutate( Type=as.character(cuomoClass) )%>% 
+        mutate( Label=as.character(cuomoA$label) )%>%
+        ggplot() +
+        geom_point( mapping = aes(x=tSNE1, y=tSNE2, color=Type,shape=Label), alpha=0.5)+
+        ggtitle("Identification of unstable entries"))
+
+remove(clusters, cuomoA, cuomoData_A, cuomoTsne, data1, data2, data3, df_long, k1, k2, k3, graph1, graph2, graph3, label, pairs.df1, plot.df1, i1, i2, i3, some.genes, genes, gene, cuomoClass)
+
+```
+
+We can link this graph to the density plot of all features visualized above. The smaller separation of cells that are variant correspond to the cells with the expression values that deviate from the rest of the cells. Therefore, we conclude that these variant cells are the noise added.
+
+## Dataset B: Missing labels, duplicated labels (with errors) [15 marks]
+
+### 1B: Summarise the labelling of cells [3 marks]
+
+Dataset B comprises of missing labels and duplicated labels. As seen below, there are 20 unknown classification of cell types (i.e., NAs). A summary of the data displays that this dataset has 179 cells of type 1, 157 cells of type 2 and 72 cells of type 4. When including cell type, we find that there are 10 duplicated entries, and we remove those entries. 
+
+```{r summary of labels, message = FALSE, warning=FALSE}
+# load data
+cuomoB = read.csv('Cuomo_B_Relabelled.csv',row.names = 1) 
+sum(is.na(cuomoB$classification)) # number of NAs
+
+cuomoClass = cuomoB$classification
+cuomoB$ID = rownames(cuomoB)
+table(as.factor(cuomoB$classification)) # summary of types
+
+which(duplicated(cuomoB[,-502])) # number of duplicated entries
+
+cuomoB2 = cuomoB[-which(duplicated(cuomoB[,-502])),]
+```
+
+### 1B: Comment on duplicated labels i.e. repeated gene expression vectors; address them [2 marks]
+
+However, there may be mislabeling of cell types, wherein there may be duplicated entries but inconsistent classification. Therefore, we have kept aside the classification of the cells, and then removed the additional ten duplicates. For the entries that have mislabeled classification, we remove the wrong label and replace them with NAs. We are left with 408 cells, where there are now 30 NAs. The distribution of the cells is now as follows: 163 cells of type 1, 148 cells of type 2, 67 cells of type 4.
+
+```{r addressing duplicated labels, message=FALSE, warning=FALSE}
+
+a <- which(duplicated(cuomoB2[, -c(501,502)], fromLast = TRUE))
+
+b <- which(duplicated(cuomoB2[, -c(501,502)], fromLast = FALSE))
+
+duplicated <- cuomoB2[c(a, b),]
+
+cuomoClass=as.data.frame(cuomoClass)
+cuomoClass$ID = rownames(cuomoClass)
+
+duplicated2 <- left_join(duplicated, cuomoClass, on="ID", all=TRUE)
+
+duplicated2 <- duplicated2 %>%
+  select(-classification, -cuomoClass)
+
+cuomoB2 = cuomoB2[-b,]
+
+for(i in a){
+  cuomoB2$classification[i]=NA }
+
+sum(is.na(cuomoB2$classification))
+
+rownames(cuomoB2) = cuomoB2$ID
+cuomoB2 = cuomoB2[,-502]
+
+table(as.factor(cuomoB2$classification))
+
+indexna = which(is.na(cuomoB2$classification))
+
+```
+
+### 1B: Present 2 methods for imputing values, one static, one model based [4 marks each]
+
+To address the missing labels, two methods of imputation have been considered. Method 1 is a static method that uses the mode of classification to impute values. Method 2 is a model-based approach that imputes missing data for categorical variables using the Bayesian polytomous regression model, using the mice package.
+
+```{r imputation2, message = FALSE, warning = FALSE}
+# static imputation
+
+cuomoB2$classification = as.factor(cuomoB2$classification)
+
+cuomoB_mode = cuomoB2 %>%
+  mutate(classification = if_else(is.na(classification),
+         calc_mode(classification),
+         classification))
+
+# model-based imputation
+
+imp <- mice(cuomoB2, method = "polyreg")
+cuomoB_imp <- complete(imp)
+```
+
+### 1B: Summary of the imputed labels [1 mark]
+
+Below, we have created two tables to summarise imputed labels for each method. We see that all the imputed values for classification using the static imputation method are assigned to cell type 1. For the model-based imputation method, the distribution for the 30 NA cells is as follows: 12 cells of type 1, 10 cells of type 2, and 8 cells of type 3. There is higher variance in this distribution as the model-based uses the current distribution of values to predict the new values.
+
+```{r summary, message = FALSE, warning = FALSE}
+table(cuomoB_imp$classification[indexna])
+```
+
+### 1B: Recalculate the overall summary of cell labels [1 mark] [+]
+### 1B: Compare the new summary with the previous one [2 marks]
+
+The new distribution using the static imputation method is: 193 cells with type 1, 148 cells with type 2 and 67 cells with type 4.
+The new distribution using the model imputation method is: 175 cells with type 1, 158 cells with type 2, 75 cells of type 4.
+The old distribution comprised of 30 NAs, 163 cells of type 1, 148 cells of type 2, and 67 cells of type 4.
+
+```{r recalculate, message = FALSE, warning = FALSE}
+table(cuomoB2$classification)
+table(cuomoB_mode$classification)
+table(cuomoB_imp$classification)
+```
+
+### 1B: Compare the two imputation methods [2 marks]
+
+Below, we have created a table comparing the two methods. While the static imputation method assigns more to type 1, the methods largely agree.
+
+```{r comparison2, message = FALSE, warning = FALSE}
+new = as.data.frame(cuomoB_mode$classification)
+colnames(new)[1]="mode"
+new$model = cuomoB_imp$classification
+with(new, table(mode, model))
+
+```
+
+## Dataset C: Missing data in features, presence of outliers [20 marks]
+
+### 1C: Summarise the missing data for the features [5 marks]
+
+Dataset C comprises of missing data in the features, along with presence of outliers. The missing data shows that 11 features have missing values for 5 cells (subsequently, 5 cells with missing values for 11 features). 
+
+```{r missing data summary, message = FALSE, warning = FALSE}
+
+cuomoC = read.csv('Cuomo_C_MissingFeatures.csv',row.names = 1)
+cuomoData_C = cuomoC[,colnames(cuomoC)[colnames(cuomoC)!='classification']]
+
+count <- as.data.frame(matrix(NA, nrow = 501, ncol = 1))
+colnames(count)[1]= "count"
+for (i in 1:501){
+  count[i,1]= sum(is.na(cuomoC[,i]))
+}
+rownames(count)= colnames(cuomoC)
+
+length(which(count$count!=0))
+
+count_c <- as.data.frame(matrix(NA, nrow = 408, ncol = 1))
+colnames(count_c)[1]= "count"
+for (i in 1:408){
+  count_c[i,1]= sum(is.na(cuomoC[i,]))
+}
+rownames(count_c)= rownames(cuomoC)
+
+length(which(count_c$count!=0))
+
+```
+
+### 1C: Detect outliers e.g. using a standardisation approach [5 marks]
+
+To detect outliers, a standardisation approach has been employed. This approach uses the median and the mean absolute deviation to identify outliers, as mean is sometimes susceptible to outliers. The outliers have been converted to NA values, as firstly they make up 6% of the data, which is quite low. To view how the gene expression values change with converting outliers to NAs, density plots have been used. We notice no difference after changing outliers to NA values.
+
+```{r density plots, message=FALSE, warning=FALSE}
+ 
+df_long <- melt(data = as.matrix(cuomoData_C), 
+                id.vars = c("cell"),
+                variable.name = "variable",
+                value.name = "value")
+
+df_long <- df_long %>%
+  select(-Var2) %>%
+  rename(cell = Var1, expression=value)
+
+graph1 <- ggplot(df_long, aes(x=expression, color=cell)) +
+  geom_density(show.legend = FALSE) +
+  xlim(c(0, 2.5))+
+  ggtitle("Original distribution")
+
+cuomoC$classification = as.factor(cuomoC$classification)
+cuomoClass = cuomoC$classification
+cuomoData_C = as.data.frame(scale(cuomoData_C, center = TRUE, scale = TRUE))
+
+df_long <- melt(data = as.matrix(cuomoData_C), 
+                id.vars = c("cell"),
+                variable.name = "variable",
+                value.name = "value")
+
+df_long <- df_long %>%
+  select(-Var2) %>%
+  rename(cell = Var1, expression=value)
+
+graph2 <- ggplot(df_long, aes(x=expression, color=cell)) +
+  geom_density(show.legend = FALSE) +
+  xlim(c(0, 2.5)) +
+  ggtitle("With outliers")
+
+# standardisation approach 
+cuomoZ = cuomoData_C
+for (i in 1:500){
+  med = median(cuomoZ[,i])
+  mad = mad(cuomoZ[,i])
+  for (j in 1:408){
+    cuomoZ[j,i] = if_else(med-3*mad <= cuomoZ[j,i] & cuomoZ[j,i] <= med+3*mad, cuomoZ[j,i],999)
+  }
+}
+
+(length(which(cuomoZ == 999)))/(500*408)
+
+
+cuomoZ[cuomoZ == 999] <- NA_real_
+
+sum(is.na(cuomoZ))
+
+df_long <- melt(data = as.matrix(cuomoZ), 
+                id.vars = c("cell"),
+                variable.name = "variable",
+                value.name = "value")
+
+df_long <- df_long %>%
+  select(-Var2) %>%
+  rename(cell = Var1, expression=value)
+
+graph3 <- ggplot(df_long, aes(x=expression, color=cell)) +
+  geom_density(show.legend = FALSE) +
+  xlim(c(0, 2.5)) + 
+  ggtitle("After removing outliers")
+
+grid.arrange(graph2, graph3)
+```
+### 1C: Impute the missing values using a model [5 marks] (+)
+### 1C: Justify the model [2 marks] (+)
+### 1C: Propose a correction of the outlier values (model-based option) [5 marks] (+)
+### 1C: Justify the model [2 marks] (+)
+
+The above questions have been tackled simultaneously as we have converted the outliers to NAs. Ergo, all missing values will be imputed together using the same model. To impute the missing values, we use a nonparametric missing value imputation using Random Forest as it allows for complex interactions and nonlinear relationships, and it outputs an out-of-bag (OOO) imputation error estimate. The estimated OOB error is 0.5524826, which is not optimal.
+
+```{r imputation, message = FALSE, warning = FALSE}
+impZ <- missForest(cuomoZ, maxiter = 10, ntree = 100)
+
+cuomo_imp = impZ$ximp
+
+impZ$OOBerror
+
+sum(is.na(cuomo_imp))
+
+```
+### 1C: Compare the imputed and original distributions [2 marks]
+
+Comparing the imputed and original distributions reveal not much difference, as the distribution of expression values remain largely similar.
+
+```{r comparison, message = FALSE, warnings = FALSE}
+
+df_long <- melt(data = as.matrix(cuomo_imp), 
+                id.vars = c("cell"),
+                variable.name = "variable",
+                value.name = "value")
+
+df_long <- df_long %>%
+  select(-Var2) %>%
+  rename(cell = Var1, expression=value)
+
+graph4 <- ggplot(df_long, aes(x=expression, color=cell)) +
+  geom_density(show.legend = FALSE)+
+  xlim(c(0, 2.5)) +
+  ggtitle("Imputed distribution")
+
+grid.arrange(graph1, graph4)
+
+```
+
+### 1C: Visualise the data before and after correction; comment [1 mark]
+
+We have visualized the data using dimensionality reduction methods, i.e., tsNE. We had to remove the any features/cells containing NA values in order to create the tsNE plots. We see a better separation between clusters (i.e., cell types) after correction, compared to the original data. 
+
+```{r visualization, message=FALSE, warning=FALSE}
+# visualization of data before and after correction
+
+cuomoTsne_imp <- Rtsne(cuomo_imp, check_duplicates=FALSE, pca=TRUE, 
+                   perplexity=50, theta=0.5, dims=2)
+tsne2 <- print(cuomoTsne_imp$Y %>% 
+        as.data.frame() %>% 
+        rename(tSNE1=V1,  tSNE2=V2) %>% 
+        mutate( Type=as.character(cuomoClass) )%>% 
+        ggplot() +
+        geom_point( mapping = aes(x=tSNE1, y=tSNE2, color=Type), alpha=0.5))+
+  ggtitle("Data after correction")
+
+cuomoC_omit <- na.omit(cuomoC)
+cuomoClass2 <- cuomoC_omit$classification
+
+cuomoTsne <- Rtsne(cuomoC_omit, check_duplicates=FALSE, pca=TRUE, 
+                   perplexity=50, theta=0.5, dims=2)
+tsne1 <- print(cuomoTsne$Y %>% 
+        as.data.frame() %>% 
+        rename(tSNE1=V1,  tSNE2=V2) %>% 
+        mutate( Type=as.character(cuomoClass2) )%>% 
+        ggplot() +
+        geom_point( mapping = aes(x=tSNE1, y=tSNE2, color=Type), alpha=0.5))+
+  ggtitle("Data before correction")
+
+grid.arrange(tsne1, tsne2)
+```
+
+
+
+```{r clean, message = FALSE, warning = FALSE}
+remove(count, count_c, cuomo_imp, cuomoC, cuomoData_C, cuomoZ, df_long, impZ, cuomoC_omit, cuomoTsne, cuomoTsne_imp)
+
+```

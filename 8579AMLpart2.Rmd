@@ -1,0 +1,460 @@
+---
+title: "Applied Machine Learning Assessment: Part 2"
+output: html_document
+---
+
+```{r include=FALSE, message = FALSE, warning=FALSE}
+
+# installing relevant packages
+cran.packages<-c("caret","tidyverse","rpart","rpart.plot","party",
+                 "randomForest","e1071","Rtsne","dbscan","C50","UpSetR",
+                 "RColorBrewer","GGally","ggfortify","reshape2","plyr",
+                 "corrplot","pROC","scatterplot3d","devtools","dendextend", 
+                 "magrittr","cluster", "gplots","methods","class","datasets", 
+                 "caTools","ggplot2","ggdendro","doParallel","devtools",
+                 "mlbench","plot3D","ROCR","UsingR","rafalib","downloader",
+                 "lattice","stepPlr","arm","kernlab","nnet","neuralnet",
+                 "MASS", "NeuralNetTools","ISLR", "boot","faraway","CVST",
+                 "readr", "pheatmap", "cluster", "missForest", "mice", "VIM",
+                 "mice", "limma", "factoextra")
+
+bioconductor.packages<-c("EBImage")
+
+# CRAN packages
+new.packages <- cran.packages[!(cran.packages %in% 
+                                installed.packages()[,"Package"])]
+if(length(new.packages)) install.packages(new.packages)
+
+# bioconductor packages
+if (!requireNamespace("BiocManager", quietly = TRUE))
+  install.packages("BiocManager")
+BiocManager::install()
+new.bio.packages<-bioconductor.packages[!(bioconductor.packages 
+                                         %in% installed.packages()[,"Package"])]
+if(length(new.bio.packages)) BiocManager::install(new.bio.packages)
+
+# packages from other repositories
+devtools::install_github("SheffieldML/vargplvm/vargplvmR")
+devtools::install_github("ManchesterBioinference/DEtime")
+
+# set working directory
+setwd("")
+
+# load relevant packages
+library(caret)
+library(ggplot2); theme_set(theme_minimal())
+library(UpSetR)
+library(GGally)
+library(rpart.plot)
+library(Rtsne)
+library(dplyr)
+library(randomForest)
+library(pheatmap)
+library(cluster)
+library(limma)
+library(reshape2)
+library(tracerer)
+library(VIM)
+library(magrittr)
+library(mice)
+library(psych)
+library(missForest)
+library(doParallel)
+library(gridExtra)
+library(grid)
+library(factoextra)
+library(doParallel)
+
+```
+
+```{r datasetB code, include=FALSE, message = FALSE, warning=FALSE}
+
+# load data
+cuomoB = read.csv('Cuomo_B_Relabelled.csv',row.names = 1) 
+sum(is.na(cuomoB$classification)) # number of NAs
+
+cuomoClass = cuomoB$classification
+cuomoB$ID = rownames(cuomoB)
+table(as.factor(cuomoB$classification)) # summary of types
+
+which(duplicated(cuomoB[,-502])) # number of duplicated entries
+
+cuomoB2 = cuomoB[-which(duplicated(cuomoB[,-502])),]
+
+# addressing duplicated labels
+a <- which(duplicated(cuomoB2[, -c(501,502)], fromLast = TRUE))
+
+b <- which(duplicated(cuomoB2[, -c(501,502)], fromLast = FALSE))
+
+duplicated <- cuomoB2[c(a, b),]
+
+cuomoClass=as.data.frame(cuomoClass)
+cuomoClass$ID = rownames(cuomoClass)
+
+duplicated2 <- left_join(duplicated, cuomoClass, on="ID", all=TRUE)
+
+duplicated2 <- duplicated2 %>%
+  select(-classification, -cuomoClass)
+
+cuomoB2 = cuomoB2[-b,]
+
+for(i in a){
+  cuomoB2$classification[i]=NA }
+
+sum(is.na(cuomoB2$classification))
+
+rownames(cuomoB2) = cuomoB2$ID
+cuomoB2 = cuomoB2[,-502]
+
+table(as.factor(cuomoB2$classification))
+
+indexna = which(is.na(cuomoB2$classification))
+
+# static imputation
+
+cuomoB2$classification = as.factor(cuomoB2$classification)
+
+cuomoB_mode = cuomoB2 %>%
+  mutate(classification = if_else(is.na(classification),
+         calc_mode(classification),
+         classification))
+
+# model-based imputation
+
+imp <- mice(cuomoB2, method = "polyreg")
+cuomoB_imp <- complete(imp)
+
+# summary
+table(cuomoB2$classification)
+table(cuomoB_mode$classification)
+table(cuomoB_imp$classification)
+
+```
+
+# Part 2
+
+For the second part of the assessment, this analysis uses Dataset B to explore some machine learning approaches. The dataset comprises 408 cells (presented on the rows), for 500 genes (presented on the columns), with a priori defined labels for the cells. The first ML approach explored is clustering, wherein two distinct clustering approaches are applied on all features in the dataset and are compared for differences. The second ML approach explored is an ensemble of support vector machines (SVMs), which is discussed further below.
+
+# Clustering [10 marks]
+
+## Clustering task: [a] apply two clustering approaches on the dataset, using all features [6 marks] 
+
+The two clustering approaches selected are hierarchical clustering and k-means clustering. The data has been split into three clusters for both approaches. To visualize the clustering, dendogram plots and k-means dimensionality plots have been generated.
+
+```{r clustering, message = FALSE, warning = FALSE}
+# clustering approach 1: hierarchical clustering
+
+hc = hclust(dist(cuomoB_imp[,-501],method="euclidean"), method = "ward.D")
+hc$labels = rownames(cuomoB_imp)
+clusters.hc=as.data.frame(cutree(hc, 3))
+colnames(clusters.hc)[1]="hc"
+clusters.hc$ID=rownames(clusters.hc)
+
+# draw dendogram with red borders around the 3 clusters
+plot(hc, labels=FALSE, main = "Hierarchical clustering")
+rect.hclust(hc, k=3, border="red")
+
+# clustering approach 2: k means
+kmeans <- kmeans(cuomoB_imp[,-501], 3, nstart = 50)
+fviz_cluster(kmeans, data = cuomoB_imp[,-501],
+             palette = c("#2E9FDF", "#00AFBB", "#E7B800"), 
+             geom = "point",
+             ellipse.type = "convex", 
+             ggtheme = theme_bw(), main="K-means clustering")
+
+clusters.km = as.data.frame(kmeans$cluster)
+colnames(clusters.km)[1]="km"
+clusters.km$ID=rownames(clusters.km)
+
+```
+
+We see in the above plots that both the dendogram and the k-means PCA plot have been separated into the three different classes. 
+
+## Clustering task: [b] summarise the differences [4 marks]
+
+To summarise the differences between the clustering approaches, a contingency table has been created to illustrate the number of cells assigned simultaneously to each cell type by method.
+
+```{r summary of diffs, message = FALSE, warning = FALSE}
+
+# summary of difference
+
+clusters=merge(clusters.km,clusters.hc,by="ID")
+with(clusters, table(km, hc))
+
+```
+
+For the hierarchical clustering, a large proportion of the data (164/408, i.e. ~40%) was assigned to the same cluster, i.e., type 1. For k-means clustering as well, ~43% of the data was assigned to type 1. 25.4% of the data is assigned to type 2 for hierarchical clustering and 30.1% of the data is assigned type 2 for k-means clustering. Finally, for cell type 4, 34.8% of the data is assigned to the cluster for hierarchical clustering, compared to 26.7% of the data for k-means clustering.
+
+Both methods perform relatively similarly in assigning clusters with some discrepancy for cell types 2 and 4.
+
+# Ensemble/Stack of Support Vector Machines (SVMs) [15 marks]
+
+## SVMs: [a] apply (and optimise the parameters) for a SVM model on the selected dataset [7 marks]
+
+Support vector machines (SVMs) are models of supervised learning; they find a hyperplane in an N-dimensional space(where N is the number of features) that distinctly classifies the data points. Firstly, for dataset B, an SVM model is applied and parameters are optimised after following the appropriate pre-processing steps and cross-validation procedures. Two hyperparameters (i.e., kernel and cost) were optimised, and the best SVM model was chosen, i.e, radial kernel, with c parameter 1. 
+
+We have applied several pre-processing steps for the classification method, and therefore remove near-zero variance variables. We also remove highly correlated variables by setting a cutoff of 0.5, which means all genes and features that have a correlation larger than 0.5 are excluded from the analyses. We divide our data into a training and test set (with a 63-37 split). 
+
+```{r svm, message=FALSE, warning=FALSE}
+
+cuomoData = cuomoB_imp[,-501]
+cuomoClass = cuomoB_imp[,501]
+
+# preprocessing
+
+nzv <- nearZeroVar(cuomoData, saveMetrics=T) # identify zero and near zero variance variables
+cuomoData = cuomoData[,rownames(nzv[nzv$zeroVar==FALSE,])] # remove constant genes 
+near.zero.variance = rownames(nzv[nzv$nzv==TRUE,]) # store nzv
+print(length(near.zero.variance))
+
+corMat <- cor(cuomoData) # identify highly correlated variables
+highCorr <- findCorrelation(corMat, cutoff=0.5) 
+highly.correlated = names(cuomoData)[highCorr] # store
+print(length(highly.correlated)) 
+
+# remove highly correlated and near zero var features
+features.to.exclude = unique(c(highly.correlated,near.zero.variance))
+print(length(features.to.exclude))
+cuomoData = cuomoData[,!(colnames(cuomoData)%in%features.to.exclude)]
+
+# parallelisation
+registerDoParallel(8)
+getDoParWorkers()
+
+# split into training and test
+set.seed(42)
+trainIndex <- createDataPartition(y=cuomoClass, times=1, p=0.63, list=F)
+classTrain <- as.factor(cuomoClass[trainIndex])
+dataTrain <- cuomoData[trainIndex,]
+classTest <- as.factor(cuomoClass[-trainIndex])
+dataTest <- cuomoData[-trainIndex,]
+
+# setting up pf cross-validation seeds
+set.seed(42)
+seeds <- vector(mode = "list", length = 11)
+for(i in 1:10) seeds[[i]] <- sample.int(1000, 75)
+seeds[[11]] <- sample.int(1000,1)
+
+train_ctrl <- trainControl(method="cv",
+                           number = 10,
+                           preProcOptions=list(cutoff=0.75),
+                           seeds = seeds)
+
+# Linear Kernel
+L_models <- train(dataTrain, classTrain,
+                  method="svmLinear",
+                  preProcess = c("BoxCox"),
+                  tuneLength=5,
+                  trControl=train_ctrl)
+
+# Polynomial Kernel
+P_models <- train(dataTrain, classTrain,
+                  method="svmPoly",
+                  preProcess = c("BoxCox"),
+                  tuneLength=5,
+                  trControl=train_ctrl)
+
+# Radial Kernel
+R_models <- train(dataTrain, classTrain,
+                  method="svmRadial",
+                  preProcess = c("BoxCox"),
+                  tuneLength=5,
+                  trControl=train_ctrl)
+
+
+# compare performance across folds
+resamps <- resamples(list(Linear = L_models, Poly = P_models, Radial = R_models))
+summary(resamps)
+
+resamps.df = as.data.frame(resamps)
+resamps.df.melt = reshape2::melt(resamps.df,id_vars=c('Resample'))
+ggplot(resamps.df.melt,aes(x=variable,y=value,color=variable))+geom_boxplot() + ggtitle("Accurary boxplot")
+ggplot(resamps.df.melt,aes(x=value,y=..density..,color=variable))+geom_density()+ggtitle("Accuracy density plot")
+
+
+# pick the best 
+
+if (median(P_models$resample$Accuracy)>max(median(L_models$resample$Accuracy),median(R_models$resample$Accuracy)) |
+    IQR(P_models$resample$Accuracy)<min(IQR(L_models$resample$Accuracy),IQR(R_models$resample$Accuracy))){
+  bestSVM = P_models
+  grid = expand.grid(.C=bestSVM$bestTune$C,.degree=bestSVM$bestTune$degree,.scale=bestSVM$bestTune$scale)
+} else if (median(R_models$resample$Accuracy)>median(L_models$resample$Accuracy) |
+           IQR(R_models$resample$Accuracy)<IQR(L_models$resample$Accuracy)){
+  bestSVM = R_models
+  grid = expand.grid(.C=bestSVM$bestTune$C,.sigma = bestSVM$bestTune$sigma)
+} else {
+  bestSVM = L_models
+  grid = expand.grid(.C=bestSVM$bestTune$C)
+}
+
+train_ctrl <- trainControl(method="none",
+                           seeds = seeds)
+# fit the svm model
+
+svmFit <- train(dataTrain, classTrain,
+                method=bestSVM$method,
+                preProcess = c("BoxCox"),
+                tuneGrid = grid,
+                trControl = train_ctrl)
+
+svmTest = predict(svmFit,dataTest)
+confusionMatrix(svmTest,classTest)
+
+remove(corMat,cuomoB,L_models,P_models,R_models,nzv,resamps,resamps.df,resamps.df.melt,a,b,features.to.exclude,highCorr,highly.correlated,near.zero.variance)
+
+```
+
+All the models are achieving an accuracy of over 92%, which is quite good. The median value for the linear SVM is much lower than the polynomial and radial SVMs. The overall distribution for the linear SVM is also lower than the other two; therefore, we can exclude the linear kernel. We have used an equation to predict the best model based on median accuracy and interquartile range. The confusion matrix has yielded decent predictions, and sensitivity and specificity values are relatively high. This will be discussed further in the open-ended discussion.
+
+## SVMs: [b] subsample the original dataset (10 iterations) – without replacement, to 63% of the data; generate the SVM models on the same parameters as before [5 marks]
+
+We partitioned the data, i.e., we use 63% of the data and sub-sample it 10 times in this section. We train the SVM models on each of the 10 sub-samples using the same parameters as before. We then transposed the class predictions generated by the SVM model on each of subsample into a data frame. 
+
+```{r subsample dataset, message = FALSE, warning = FALSE}
+
+trainIndex1 <- as.data.frame(createDataPartition(y=classTrain, times=10, p=0.9, list=F))
+x = as.numeric(408 - length(classTrain))
+box=as.data.frame(matrix(data=NA,nrow=x,ncol=1))[,-1]
+box$ID=1:x
+for (i in 1:10) {
+  classTrain1 <- as.factor(classTrain[trainIndex1[,i]])
+  dataTrain1 <- dataTrain[trainIndex1[,i],]
+  svmFit <- train(dataTrain1, classTrain1,
+                  method=bestSVM$method,
+                  preProcess = c("BoxCox"),
+                  tuneGrid = grid,
+                  trControl = train_ctrl)
+  
+  svmTest = predict(svmFit,dataTest)
+  mat=as.data.frame(matrix(data=NA,nrow=x,ncol=1))[,-1]
+  mat$test=svmTest
+  mat$ID=1:x
+  colnames(mat)[1]=paste("svm",i,sep="-")
+  
+  box=merge(box,mat,by="ID")
+}
+```
+
+## SVMs: [c] on the test dataset, apply the voting approach; compare it to the outputs resulted in [a] [3 marks]
+
+To apply the voting approach, using the dataframe created earlier with the predictions of classes per observation, we assume that the final classification is the one chosen a majority of the sub-samples. We compare the output using confusion matrix and accuracy metrics. This will be discussed further in the open-ended discussion.
+
+```{r voting approach, message = FALSE, warning = FALSE}
+
+box=box[,-1]
+for (i in 1:149) {
+  box$gr1[i]=length(which(box[i,c(1:10)]==1))
+  box$gr2[i]=length(which(box[i,c(1:10)]==2))
+  box$gr4[i]=length(which(box[i,c(1:10)]==4))
+  box$max[i]=max(box$gr1[i],box$gr2[i],box$gr4[i])
+}
+
+box=box[,-c(1:10)]
+
+box$gr1=as.numeric(box$gr1)
+box$gr2=as.numeric(box$gr2)
+box$gr4=as.numeric(box$gr4)
+
+box = box %>%
+  mutate(class = case_when(gr1 == box$max ~ 1,
+                           gr2 == box$max ~ 2,
+                           gr4 == box$max ~ 4))%>%
+mutate(label=ifelse(box$max < 10, "Variant", "Invariant"))
+
+ensembleSVM <- as.factor(box$class)
+
+confusionMatrix(svmTest, classTest) # first SVM vs all SVM sub-samples
+confusionMatrix(ensembleSVM,svmTest) # emsemble vs first SVM
+confusionMatrix(ensembleSVM,classTest) # ensemble vs all SVM sub-samples
+
+length(which(box$label=="Variant"))
+length(which(box$label=="Invariant"))
+
+box$actual=classTest
+box$test=ifelse(box$class==box$actual,1,0)
+table(box$label,box$class)
+table(box$label,box$test)
+
+
+```
+
+# Open-ended discussion
+
+## Open-ended discussion: [a] comment on the overall separability of classes, summaries [5 marks]
+
+The dataset comprises 408 cells (presented on the rows), for 500 genes (presented on the columns). We ran a single SVM model, as well as an ensemble model of SVMs. The parameters were optimised for the single SVM for 63% of the data and the remainder 37% of the data was used for testing. For the ensemble of SVMs, we sub sampled 63% of the data 10 times without replacement. From the confusion matrix observed in question [a] of the SVM question (i.e., the single SVM), we see that overall accuracy is ~87%, which is good but not particularly high. The confusion matrix shows us that the model has yielded good predictions, especially for class 1, and they are relatively good for class 2. Class 4 however suffers from lower sensitivity, which may be a result of lower number of cells in the class.
+
+In part [c], we applied a voting approach to yield predictions for the ensemble SVM method. We compare the single SVM to the ensemble SVM without replacement using confusion matrices. The two methods have performed relatively similarly, with only 0.4% difference in class assignment (confusion matrix between ensembleSVM and svmTest). We can also comment on the performance of the emsemble SVM compared to the test data set, i.e., classTest, and we see that the accuracy, sensitivity and specificity is largely the same. 
+It is likely that the ensemble SVM has not performed well as it has been trained only to 10 sub-samples, and we are combining classifiers making individual decisions. Instead, using other methods such as bagging (wherein sampling takes place with replacement, i.e., parallel training of classifiers) and boosting (where classifiers are trained sequentially, which means each classifier is trained given the knowledge of the previously trained classifiers) would have been alternative options to improve the performance of the ensemble model. An additional way to improve the ensemble model would be stacking (which is a combination of both boosting and bagging) to optimise hyperparameters of each classifier separately, and have the final classifier be the weighted sum of component classifiers.
+
+## Open-ended discussion: [b] comment on the number / characteristics of unambiguous and ambiguous entries [10 marks]
+
+The ambiguous and unambiguous entries have been identified by labeling cells as variant if they have been classified the same by all of the 10 sub-samples and invariant otherwise. This is because we want to ensure that unambiguous cells are defined as those whose classification is unanimously agreed upon. This results of this can be seen in part [c] of the SVM task. We can see that 136 cells are invariant, and 14 cells are variant, implying that most classifiers agree upon the classification of cell types.
+
+It has also been explored whether the variant cells are the ones that are classified incorrectly by the model, and we surprisingly find 18 of the invariant cells are also classified incorrectly.
+
+## Open-ended discussion: [c] discuss the features used in the model (all features, a selection of features; [10 marks]
+
+For the SVM model, we use the function varImp to check for which features are of importance. For SVM models, varImp computes the area under the ROC curve. The top 20 features are found and reported in the BONUS Clustering task [c]. We train the SVM on the top 20 features to find that the accuracy metrics slightly improved, specifically for the fourth class. The sensitivities have improved slightly as well. 
+
+# BONUS Part 2: Clustering task ([c], [d], [e])
+
+## Clustering task: [c] apply the same two clustering approaches on a selection of features e.g. top 10 most discriminative features [bonus 5 marks]
+## Clustering task: [d] compare the partitions on the selection of features [bonus 3 marks]
+
+The clustering approaches have been applied on a subset of the top 20 discriminative features. The partitions are compared using contingency tables, to differentiate between hierarchical and k-means clustering.
+
+```{r top 20 features, message = FALSE, warning = FALSE}
+
+varImp(svmFit)
+svmFeat = varImp(svmFit)$importance
+svmFeatures = head(rownames(svmFeat[order(-rowSums(svmFeat)),]),20)
+print(svmFeatures)
+cuomoData_topfeatures = cuomoB_imp[,svmFeatures]
+
+# hierarchical clustering
+hc1=hclust(dist(cuomoData_topfeatures,method="euclidean"), method = "ward.D")
+hc1$labels = rownames(cuomoData_topfeatures)
+clusters.hc1=as.data.frame(cutree(hc1, 3))
+colnames(clusters.hc1)[1]="hc"
+clusters.hc1$ID=rownames(clusters.hc1)
+plot(hc1)
+rect.hclust(hc1, k=3, border="red")
+
+# k-means clustering
+km1 <- kmeans(cuomoData_topfeatures, 3, nstart = 50)
+fviz_cluster(km1, data = cuomoData_topfeatures,
+             palette = c("#2E9FDF", "#00AFBB", "#E7B800"), 
+             geom = "point",
+             ellipse.type = "convex", 
+             ggtheme = theme_bw(), main="K-means clustering")
+clusters.km1 = as.data.frame(km1$cluster)
+colnames(clusters.km1)[1]="km"
+clusters.km1$ID=rownames(clusters.km1)
+
+clusters1=merge(clusters.km1,clusters.hc1,by="ID")
+
+# comparing partitions
+with(clusters1, table(km, hc))
+
+```
+
+## Clustering task: [e] compare the partitions obtained on the selection of features against the ones obtained on all features, per method [bonus 2 marks]
+
+We also compare the partitions between the top 20 discriminative features and all features, by method of clustering, as seen in the tables below.
+
+```{r comparison, message = FALSE, warning = FALSE}
+
+comparison1=merge(clusters.km,clusters.km1,by="ID")
+colnames(comparison1)[2]="all"
+colnames(comparison1)[3]="top"
+
+with(comparison1, table(all, top))
+
+comparison2=merge(clusters.hc,clusters.hc1,by="ID")
+colnames(comparison2)[2]="all"
+colnames(comparison2)[3]="top"
+
+with(comparison2, table(all, top))
+```
+
