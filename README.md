@@ -4,8 +4,8 @@ The repository contains code used to analyse sequencing data (gene expression ma
 
 ## Part 1
 
-A range of data-mining approaches were applied on three types of 'faulty' datasets. This included the application of clustering approaches and imputation methods. The associated R Markdown document is XXX
+A range of data-mining approaches were applied on three types of 'faulty' datasets. Datasets were visualised and examined for unstable entries or missing values. Imputation methods (static as well as model-based methods) were applied and compared. The associated R Markdown document with relevant code can be found in the AML_part1.Rmd file.
 
 ## Part 2
 
-A range of data-mining approaches were applied on three types of 'faulty' datasets. This included the application of clustering approaches and imputation methods. The associated R Markdown document is XXX
+Two machine learning methods were applied on a chosen dataset using all features. The first method was clustering; two approaches, hierarchical clustering and k-means clustering, were applied on all features as well as a selection of features, and the subsequent partitions were compared. The second method was an ensemble of support vector machines that was applied on the full dataset as well as a subsample. A voting approach was applied to yield predictions for the ensemble SVM method. The associated R Markdown document with relevant code can be found in the AML_part2.Rmd file.
